@@ -5,7 +5,8 @@ use core::str::FromStr;
 
 use heapless::Vec;
 
-use crate::lexer::{Flag, IntoTokens, Token, Values};
+use crate::Tokens;
+use crate::lexer::{Flag, Token, Values};
 
 /// Defines the possible errors that may occur during parsing of arguments.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -33,30 +34,40 @@ pub enum Error {
 
 /// Defines the result of argument parsing. This is a simple key-value store that offers a look-up
 /// over parsed arguments.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct ParsedArgs<'a, const ARG_COUNT_MAX: usize = 8> {
-    args: Vec<(&'a str, Values<'a>), ARG_COUNT_MAX>,
+pub struct ParsedArgs<'a, IterTy, const ARG_COUNT_MAX: usize = 8>
+where
+    IterTy: Iterator<Item = &'a str> + Clone,
+{
+    args: Vec<(&'a str, Values<'a, IterTy>), ARG_COUNT_MAX>,
 }
 
-impl<'a, const SIZE: usize> ParsedArgs<'a, SIZE> {
+impl<'a, IterTy, const SIZE: usize> ParsedArgs<'a, IterTy, SIZE>
+where
+    IterTy: Iterator<Item = &'a str> + Clone,
+{
     /// Parse the command line input from a token stream. The result is the set of found arguments.
-    pub fn parse(argv: impl IntoTokens<'a>, ids: &[(Flag<'a>, &'a str)]) -> Self {
-        Self::try_parse(argv, ids).expect("cannot parse arguments")
+    pub fn parse_from<'flag, FlagIterTy>(argv: IterTy, ids: FlagIterTy) -> Self
+    where
+        'flag: 'a,
+        FlagIterTy: Iterator<Item = &'flag (Flag<'flag>, &'flag str)> + Clone,
+    {
+        Self::try_parse_from(argv, ids).expect("cannot parse arguments")
     }
 
     /// Try to parse the input arguments.
-    pub fn try_parse(
-        argv: impl IntoTokens<'a>,
-        ids: &[(Flag<'a>, &'a str)],
-    ) -> Result<Self, Error> {
-        let mut tokens = argv.into_tokens();
-
-        let mut out = Self::default();
+    pub fn try_parse_from<'flag, FlagIterTy>(argv: IterTy, ids: FlagIterTy) -> Result<Self, Error>
+    where
+        'flag: 'a,
+        FlagIterTy: Iterator<Item = &'flag (Flag<'flag>, &'flag str)> + Clone,
+    {
+        let mut tokens = Tokens::new(argv);
+        let mut out = ParsedArgs::default();
 
         while let Some(token) = tokens.next() {
             if let Token::Flag(f) = &token {
-                let id = if let Some((_, id)) = ids.iter().find(|x| f == &x.0) {
+                let id = if let Some((_, id)) = ids.clone().find(|&x| *f == x.0) {
                     id
                 } else {
                     return Err(Error::UndefinedArgument);
@@ -99,7 +110,7 @@ impl<'a, const SIZE: usize> ParsedArgs<'a, SIZE> {
     where
         T: FromStr,
     {
-        if let Some((_, values)) = self.args.iter().find(|x| id == x.0) {
+        if let Some((_, values)) = self.args.iter().find(|&x| id == x.0) {
             let mut iter = values.clone();
 
             let value = if let Some(value) = iter.next() {
@@ -148,30 +159,38 @@ impl<'a, const SIZE: usize> ParsedArgs<'a, SIZE> {
     }
 }
 
+impl<'a, IterTy, const SIZE: usize> Default for ParsedArgs<'a, IterTy, SIZE>
+where
+    IterTy: Iterator<Item = &'a str> + Clone,
+{
+    fn default() -> Self {
+        ParsedArgs {
+            args: Vec::default(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use googletest::prelude::*;
-
-    use crate::lexer::Tokens;
 
     use super::*;
 
     #[test]
     fn it_should_parse_missing_arg() {
         let ids = &[(Flag::Short('v'), "verbose")];
-        let tokens = Tokens::new(&["-v"]);
+        let argv = ["-v"].into_iter();
 
-        let args: ParsedArgs<'_, 1> = ParsedArgs::parse(tokens, ids);
-
+        let args: ParsedArgs<'_, _, 1> = ParsedArgs::parse_from(argv, ids.iter());
         assert_that!(args.try_get_one::<u32>("verbose"), eq(&Ok(Some(None))));
     }
 
     #[test]
     fn it_should_parse_invalid_arg() {
         let ids = &[(Flag::Short('v'), "verbose")];
-        let tokens = Tokens::new(&["-v", "-42"]);
+        let argv = ["-v", "-42"].into_iter();
 
-        let args: ParsedArgs<'_, 1> = ParsedArgs::parse(tokens, ids);
+        let args: ParsedArgs<'_, _, 1> = ParsedArgs::parse_from(argv, ids.iter());
 
         assert_that!(
             args.try_get_one::<u32>("verbose"),
@@ -182,9 +201,9 @@ mod tests {
     #[test]
     fn it_should_parse_valid_value() {
         let ids = &[(Flag::Short('v'), "verbose")];
-        let tokens = Tokens::new(&["-v", "42"]);
+        let input = ["-v", "42"].into_iter();
 
-        let args: ParsedArgs<'_, 1> = ParsedArgs::parse(tokens, ids);
+        let args: ParsedArgs<'_, _, 1> = ParsedArgs::parse_from(input, ids.iter());
 
         assert_that!(
             args.try_get_one::<u32>("verbose"),

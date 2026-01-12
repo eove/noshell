@@ -19,6 +19,8 @@ defmt = { workspace = true, optional = true }
 heapless = { workspace = true }
 thiserror = { workspace = true }
 
+noterm = { version = "0.1.0", path = "../../noterm" }
+
 noshell-macros = { path = "../noshell-macros", version = "0.2.0" }
 noshell-parser = { path = "../noshell-parser", version = "0.2.0" }
 

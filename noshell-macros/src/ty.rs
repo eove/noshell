@@ -155,8 +155,7 @@ mod tests {
         assert_eq!(
             Some(true),
             get_ty_param_if_name(&ty, "Option")
-                .and_then(|x| get_ty_param_if_name(x, "Vec"))
-                .and_then(|x| Some(is_simple_ty(x, "i32"))),
+                .and_then(|x| get_ty_param_if_name(x, "Vec").map(|x| is_simple_ty(x, "i32")))
         );
     }
 

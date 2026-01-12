@@ -3,11 +3,11 @@
 #![allow(async_fn_in_trait)]
 #![deny(missing_docs)]
 
-use heapless::Vec;
 pub use noshell_macros as macros;
 pub use noshell_parser as parser;
 
 pub use macros::Parser;
+// use noterm::io::blocking::Write;
 
 /// Defines the possible errors that may occur during usage of the crate.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -27,110 +27,150 @@ pub enum Error {
     Utf8,
 }
 
-/// Command.
-pub struct Command {
-    runner: fn(&[&str], &mut [u8]) -> usize,
-}
+// /// Command trait.
+// pub trait Callback {
+//     /// Execute the callback.
+//     fn call(&mut self, input: &str);
+// }
 
-impl Command {
-    /// Run the command.
-    pub fn run(&self, args: &[&str], output: &mut [u8]) -> usize {
-        (self.runner)(args, output)
-    }
-}
+// /// Command.
+// pub struct Command<'a, OutputTy: Write>(pub(crate) TypedCommand<'a, dyn Callback + 'a, OutputTy>);
 
-/// Parse top-level commands.
-pub fn lookup(name: &str) -> Result<Command, Error> {
-    let entries = unsafe {
-        let start = (&NOSHELL_COMMANDS_START as *const u32).cast::<CommandEntry>();
-        let end = (&NOSHELL_COMMANDS_END as *const u32).cast::<CommandEntry>();
-        let len = (end as usize) - (start as usize);
+// pub(crate) struct TypedCommand<'a, CalleeTy: Callback + ?Sized, OutputTy: Write> {
+//     callee: &'a CalleeTy,
+// }
 
-        core::slice::from_raw_parts(start, len)
-    };
+// /// Command.
+// pub struct Command(pub(crate) Call)
 
-    entries
-        .iter()
-        .find(|x| name == x.name)
-        .map(|x| Command { runner: x.runner })
-        .ok_or(Error::CommandNotFound)
-}
+// /// Callback inner function type.
+// pub struct CallbackImpl<'a, CalleeTy, OutputTy>
+// where
+//     CalleeTy: FnMut(&str, &mut OutputTy),
+//     OutputTy: Write,
+// {
+//     inner: CalleeTy,
+//     output: &'a mut OutputTy,
+// }
 
-#[repr(C)]
-struct CommandEntry {
-    name: &'static str,
-    runner: fn(&[&str], &mut [u8]) -> usize,
-}
+// impl<'a, CalleeTy, OutputTy> CallbackImpl<'a, CalleeTy, OutputTy>
+// where
+//     CalleeTy: FnMut(&str, &mut OutputTy),
+//     OutputTy: Write,
+// {
+//     /// Create a new callback.
+//     pub fn new(inner: CalleeTy, output: &'a mut OutputTy) -> Self {
+//         CallbackImpl { inner, output }
+//     }
+// }
 
-unsafe extern "C" {
-    static NOSHELL_COMMANDS_START: u32;
-    static NOSHELL_COMMANDS_END: u32;
-}
+// impl<CalleeTy, OutputTy> Callback for CallbackImpl<'_, CalleeTy, OutputTy>
+// where
+//     CalleeTy: FnMut(&str, &mut OutputTy),
+//     OutputTy: Write,
+// {
+//     fn execute(&mut self, input: &str) {
+//         (self.inner)(input, self.output)
+//     }
+// }
 
-/// Character write trait.
-pub trait Write {
-    /// Error type.
-    type Error;
+// /// Parse top-level commands.
+// pub fn lookup_in_static_entries<'a>(name: &str) -> Result<&'a mut Command<'static>, Error> {
+//     let entries: &'static mut [Command<'static>] = unsafe {
+//         let start = (&NOSHELL_COMMANDS_START as *const u32)
+//             .cast::<Command<'static>>()
+//             .cast_mut();
 
-    /// Write the given data to the underlying byte stream.
-    async fn write(&mut self, data: &[u8]) -> Result<usize, Self::Error>;
-}
+//         let end = (&NOSHELL_COMMANDS_END as *const u32)
+//             .cast::<Command<'static>>()
+//             .cast_mut();
 
-/// Character read trait.
-pub trait Read {
-    /// Error type;
-    type Error;
+//         let len = (end as usize) - (start as usize);
 
-    /// Read some data from the underlying byte stream.
-    async fn read(&self, data: &mut [u8]) -> Result<usize, Self::Error>;
-}
+//         core::slice::from_raw_parts_mut(start, len)
+//     };
 
-/// Run the shell.
-pub async fn start<IO: Read + Write>(mut io: IO) -> Result<(), Error> {
-    let mut input = [0u8; 1024];
-    let mut output = [0u8; 1024];
+//     entries
+//         .iter_mut()
+//         .find(|entry| name == entry.name)
+//         .ok_or(Error::CommandNotFound)
+// }
 
-    let mut cursor = 0;
+// unsafe extern "C" {
+//     static NOSHELL_COMMANDS_START: u32;
+//     static NOSHELL_COMMANDS_END: u32;
+// }
 
-    loop {
-        let args: Vec<&str, 32> = loop {
-            match io.read(&mut input[cursor..]).await {
-                Ok(len) => {
-                    if let Some(eol) = input[cursor..cursor + len]
-                        .iter()
-                        .position(|&x| x as char == '\n')
-                    {
-                        let end = cursor + eol;
-                        cursor = 0;
+// /// Character write trait.
+// pub trait Write {
+//     /// Error type.
+//     type Error;
 
-                        let line = str::from_utf8(&input[..end]).map_err(|_| Error::Utf8)?;
-                        let args = line.split(" ").collect();
+//     /// Write the given data to the underlying byte stream.
+//     async fn write(&mut self, data: &[u8]) -> Result<usize, Self::Error>;
+// }
 
-                        break args;
-                    } else {
-                        cursor += len;
-                    }
-                }
+// /// Character read trait.
+// pub trait Read {
+//     /// Error type;
+//     type Error;
 
-                Err(_) => {
-                    cursor = 0;
-                }
-            }
-        };
+//     /// Read some data from the underlying byte stream.
+//     async fn read(&self, data: &mut [u8]) -> Result<usize, Self::Error>;
+// }
 
-        let Some(name) = args.first() else {
-            continue;
-        };
+// /// Run the shell.
+// pub async fn run<IO: Read + Write>(mut io: IO) -> Result<(), Error> {
+//     let mut input = [0u8; 1024];
+//     let mut output = [0u8; 1024];
 
-        let Ok(cmd) = lookup(name) else {
-            continue;
-        };
+//     let mut cursor = 0;
 
-        let len = cmd.run(&args[1..], &mut output);
-        io.write(&output[..len]).await.ok();
-    }
-    // Ok(())
-}
+//     loop {
+//         'restart: {
+//             let cmdline = loop {
+//                 match io.read(&mut input[cursor..]).await {
+//                     Ok(len) => {
+//                         if let Some(eol) = input[cursor..cursor + len]
+//                             .iter()
+//                             .position(|&x| x as char == '\n')
+//                         {
+//                             let end = cursor + eol;
+//                             cursor = 0;
+
+//                             let cmdline = str::from_utf8(&input[..end]).map_err(|_| Error::Utf8)?;
+
+//                             break cmdline;
+//                         } else {
+//                             cursor += len;
+
+//                             if cursor >= input.len() {
+//                                 cursor = 0;
+//                                 break 'restart;
+//                             }
+//                         }
+//                     }
+
+//                     Err(_) => {
+//                         cursor = 0;
+//                         break 'restart;
+//                     }
+//                 }
+//             };
+
+//             let Some(name) = cmdline.split(" ").next() else {
+//                 break 'restart;
+//             };
+
+//             let Ok(cmd) = lookup_in_static_entries(name) else {
+//                 break 'restart;
+//             };
+
+//             let len = cmd.run(cmdline, &mut output);
+//             io.write(&output[..len]).await.ok();
+//         }
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
@@ -145,8 +185,8 @@ mod tests {
             value: u32,
         }
 
-        let argv = &["--value", "233"];
-        let res = MyArgs::parse(argv);
+        let argv = ["--value", "233"].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(true));
 
@@ -161,16 +201,16 @@ mod tests {
             value: Option<u32>,
         }
 
-        let argv = &[];
-        let res = MyArgs::parse(argv);
+        let argv = [].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(true));
 
         let args = res.unwrap();
         assert_that!(args.value, eq(None));
 
-        let argv = &["--value", "233"];
-        let res = MyArgs::parse(argv);
+        let argv = ["--value", "233"].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(true));
 
@@ -185,16 +225,16 @@ mod tests {
             value: Option<Option<u32>>,
         }
 
-        let argv = &[];
-        let res = MyArgs::parse(argv);
+        let argv = [].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(true));
 
         let args = res.unwrap();
         assert_that!(args.value, eq(None));
 
-        let argv = &["--value"];
-        let res = MyArgs::parse(argv);
+        let argv = ["--value"].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(true));
 
@@ -212,8 +252,8 @@ mod tests {
         }
 
         // No argument.
-        let argv = &[];
-        let res = MyArgs::parse(argv);
+        let argv = [].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(true));
 
@@ -221,14 +261,14 @@ mod tests {
         assert_that!(args.value.is_none(), eq(true));
 
         // Argument without value.
-        let argv = &["--value"];
-        let res = MyArgs::parse(argv);
+        let argv = ["--value"].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(false));
 
         // Argument with single value.
-        let argv = &["--value", "23"];
-        let res = MyArgs::parse(argv);
+        let argv = ["--value", "23"].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(true));
         let args = res.unwrap();
@@ -240,8 +280,8 @@ mod tests {
         assert_that!(vals.first().unwrap(), eq(&23));
 
         // Argument with multiple values.
-        let argv = &["--value", "23", "42", "72"];
-        let res = MyArgs::parse(argv);
+        let argv = ["--value", "23", "42", "72"].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(true));
         let args = res.unwrap();
@@ -270,8 +310,8 @@ mod tests {
         }
 
         // Argument with too much values.
-        let argv = &["--value", "1", "2", "3", "4", "5"];
-        let _ = MyArgs::parse(argv);
+        let argv = ["--value", "1", "2", "3", "4", "5"].into_iter();
+        let _ = MyArgs::try_parse_from(argv);
     }
 
     #[test]
@@ -284,20 +324,20 @@ mod tests {
         }
 
         // No argument.
-        let argv = &[];
-        let res = MyArgs::parse(argv);
+        let argv = [].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(false));
 
         // Argument without value.
-        let argv = &["--value"];
-        let res = MyArgs::parse(argv);
+        let argv = ["--value"].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(false));
 
         // Argument with single value.
-        let argv = &["--value", "23"];
-        let res = MyArgs::parse(argv);
+        let argv = ["--value", "23"].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(true));
         let args = res.unwrap();
@@ -306,8 +346,8 @@ mod tests {
         assert_that!(args.value.first().unwrap(), eq(&23));
 
         // Argument with multiple values.
-        let argv = &["--value", "23", "42", "72"];
-        let res = MyArgs::parse(argv);
+        let argv = ["--value", "23", "42", "72"].into_iter();
+        let res = MyArgs::try_parse_from(argv);
 
         assert_that!(res.is_ok(), eq(true));
         let args = res.unwrap();
@@ -333,7 +373,18 @@ mod tests {
         }
 
         // Argument with too much values.
-        let argv = &["--value", "1", "2", "3", "4", "5"];
-        let _ = MyArgs::parse(argv);
+        let argv = ["--value", "1", "2", "3", "4", "5"].into_iter();
+        let _ = MyArgs::try_parse_from(argv);
     }
+
+    // #[derive(noshell::Parser)]
+    // struct ShellArgs {
+    //     #[arg(long, default_value = "false")]
+    //     debug: bool,
+    // }
+
+    // static SHELL_COMMAND: Command<'_> = Command::new("shell", |input: &str, output: impl Write| {
+    //     let words = Shlex::new(input);
+    //     let args = ShellArgs::parse
+    // });
 }

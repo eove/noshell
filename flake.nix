@@ -92,6 +92,7 @@
               # Build dependencies.
               bacon
               cargo-deny
+              cargo-insta
               cargo-nextest
               cargo-semver-checks
               clippy
