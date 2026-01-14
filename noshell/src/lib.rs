@@ -10,6 +10,8 @@ pub use macros::Parser;
 // use noterm::io::blocking::Write;
 
 pub mod lexer;
+pub mod line;
+pub mod prompt;
 
 /// Defines the possible errors that may occur during usage of the crate.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -27,6 +29,10 @@ pub enum Error {
     /// Invalid utf8 string.
     #[error("invalid utf8 string")]
     Utf8,
+
+    /// Unknown error, for development only.
+    #[error("unknown error")]
+    Unknown,
 }
 
 /// Unescape special characters in input string.

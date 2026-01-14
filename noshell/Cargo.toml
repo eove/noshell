@@ -24,6 +24,7 @@ noterm = { version = "0.1.0", path = "../../noterm" }
 
 noshell-macros = { path = "../noshell-macros", version = "0.2.0" }
 noshell-parser = { path = "../noshell-parser", version = "0.2.0" }
+futures = { version = "0.3.31", default-features = false }
 
 [dev-dependencies]
 rstest = "0.26.1"
