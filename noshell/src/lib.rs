@@ -1,5 +1,5 @@
 //! noshell, a `no_std` argument parser and a shell for constrained systems.
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![allow(async_fn_in_trait)]
 #![deny(missing_docs)]
 
@@ -8,6 +8,8 @@ pub use noshell_parser as parser;
 
 pub use macros::Parser;
 // use noterm::io::blocking::Write;
+
+pub mod lexer;
 
 /// Defines the possible errors that may occur during usage of the crate.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -25,6 +27,45 @@ pub enum Error {
     /// Invalid utf8 string.
     #[error("invalid utf8 string")]
     Utf8,
+}
+
+/// Unescape special characters in input string.
+///
+/// This requires allocating an output string to accumulate the resulting string. This is done
+/// using `heapless::String`.
+pub fn unescape<const SIZE: usize>(input: &str) -> heapless::String<SIZE> {
+    let (acc, _) =
+        input.chars().fold(
+            (heapless::String::new(), false),
+            |(mut acc, escaped), c| match escaped {
+                // If the character is escaped and is special, consume it as unescaped.
+                true if ['$', '"', '\\'].contains(&c) => {
+                    let _ = acc.push(c);
+                    (acc, false)
+                }
+
+                // If the character is a newline, preceded by a backslash, discard both.
+                true if '\n' == c => (acc, false),
+
+                // If the character is escaped but not special, consume it as escaped.
+                true => {
+                    let _ = acc.push('\\');
+                    let _ = acc.push(c);
+                    (acc, false)
+                }
+
+                // If character is not a backslash, then consume it.
+                false if c != '\\' => {
+                    let _ = acc.push(c);
+                    (acc, false)
+                }
+
+                // If the character is a backslash, discard it but keep memory of it.
+                false => (acc, true),
+            },
+        );
+
+    acc
 }
 
 // /// Command trait.
@@ -174,9 +215,25 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use googletest::prelude::{assert_that, eq};
+    use rstest::rstest;
+    use speculoos::prelude::*;
 
     use crate as noshell;
+
+    use super::*;
+
+    #[rstest]
+    #[case(r#""#, "")]
+    #[case(r#"'"#, "'")]
+    #[case(r#"''"#, "''")]
+    #[case(r#"word"#, "word")]
+    #[case(r#"\$word"#, "$word")]
+    #[case(r#"\\word"#, "\\word")]
+    #[case(r#"\"word"#, "\"word")]
+    #[case(r#"\x33word"#, "\\x33word")]
+    fn it_should_unescape_string(#[case] input: &str, #[case] expected: &str) {
+        assert_that!(unescape::<256>(input).as_str()).is_equal_to(expected);
+    }
 
     #[test]
     fn it_should_parse_args_with_simple_type() {
@@ -188,10 +245,10 @@ mod tests {
         let argv = ["--value", "233"].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(true));
+        assert_that!(res).is_ok();
 
         let args = res.unwrap();
-        assert_that!(args.value, eq(233));
+        assert_that!(args.value).is_equal_to(233);
     }
 
     #[test]
@@ -204,18 +261,18 @@ mod tests {
         let argv = [].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(true));
+        assert_that!(res).is_ok();
 
         let args = res.unwrap();
-        assert_that!(args.value, eq(None));
+        assert_that!(args.value).is_none();
 
         let argv = ["--value", "233"].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(true));
+        assert_that!(res).is_ok();
 
         let args = res.unwrap();
-        assert_that!(args.value, eq(Some(233)));
+        assert_that!(args.value).is_some().is_equal_to(233);
     }
 
     #[test]
@@ -228,18 +285,18 @@ mod tests {
         let argv = [].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(true));
+        assert_that!(res).is_ok();
 
         let args = res.unwrap();
-        assert_that!(args.value, eq(None));
+        assert_that!(args.value).is_none();
 
         let argv = ["--value"].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(true));
+        assert_that!(res).is_ok();
 
         let args = res.unwrap();
-        assert_that!(args.value, eq(Some(None)));
+        assert_that!(args.value).is_some().is_none();
     }
 
     #[test]
@@ -255,47 +312,48 @@ mod tests {
         let argv = [].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(true));
+        assert_that!(res).is_ok();
 
         let args = res.unwrap();
-        assert_that!(args.value.is_none(), eq(true));
+        assert_that!(args.value).is_none();
 
         // Argument without value.
         let argv = ["--value"].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(false));
+        assert_that!(res).is_err();
 
         // Argument with single value.
         let argv = ["--value", "23"].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(true));
+        assert_that!(res).is_ok();
         let args = res.unwrap();
 
-        assert_that!(args.value.is_some(), eq(true));
+        assert_that!(args.value).is_some();
         let vals = args.value.unwrap();
 
-        assert_that!(vals.is_empty(), eq(false));
-        assert_that!(vals.first().unwrap(), eq(&23));
+        assert_that!(vals.len()).is_greater_than(0);
+        assert_that!(vals.first()).is_some().is_equal_to(&23);
 
         // Argument with multiple values.
         let argv = ["--value", "23", "42", "72"].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(true));
+        assert_that!(res).is_ok();
         let args = res.unwrap();
 
-        assert_that!(args.value.is_some(), eq(true));
+        assert_that!(args.value).is_some();
         let vals = args.value.unwrap();
 
-        assert_that!(vals.is_empty(), eq(false));
+        assert_that!(vals.len()).is_greater_than(0);
         let mut iter = vals.iter();
 
-        assert_that!(iter.next().unwrap(), eq(&23));
-        assert_that!(iter.next().unwrap(), eq(&42));
-        assert_that!(iter.next().unwrap(), eq(&72));
-        assert_that!(iter.next(), eq(None));
+        assert_that!(iter.next()).is_some().is_equal_to(&23);
+        assert_that!(iter.next()).is_some().is_equal_to(&42);
+        assert_that!(iter.next()).is_some().is_equal_to(&72);
+        assert_that!(iter.next()).is_none();
+        assert_that!(iter.next()).is_none();
     }
 
     #[test]
@@ -327,38 +385,39 @@ mod tests {
         let argv = [].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(false));
+        assert_that!(res).is_err();
 
         // Argument without value.
         let argv = ["--value"].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(false));
+        assert_that!(res).is_err();
 
         // Argument with single value.
         let argv = ["--value", "23"].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(true));
+        assert_that!(res).is_ok();
         let args = res.unwrap();
 
-        assert_that!(args.value.is_empty(), eq(false));
-        assert_that!(args.value.first().unwrap(), eq(&23));
+        assert_that!(args.value.len()).is_greater_than(0);
+        assert_that!(args.value.first()).is_some().is_equal_to(&23);
 
         // Argument with multiple values.
         let argv = ["--value", "23", "42", "72"].into_iter();
         let res = MyArgs::try_parse_from(argv);
 
-        assert_that!(res.is_ok(), eq(true));
+        assert_that!(res).is_ok();
         let args = res.unwrap();
 
-        assert_that!(args.value.is_empty(), eq(false));
+        assert_that!(args.value.len()).is_greater_than(0);
         let mut iter = args.value.iter();
 
-        assert_that!(iter.next().unwrap(), eq(&23));
-        assert_that!(iter.next().unwrap(), eq(&42));
-        assert_that!(iter.next().unwrap(), eq(&72));
-        assert_that!(iter.next(), eq(None));
+        assert_that!(iter.next()).is_some().is_equal_to(&23);
+        assert_that!(iter.next()).is_some().is_equal_to(&42);
+        assert_that!(iter.next()).is_some().is_equal_to(&72);
+        assert_that!(iter.next()).is_none();
+        assert_that!(iter.next()).is_none();
     }
 
     #[test]

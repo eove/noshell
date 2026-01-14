@@ -17,6 +17,7 @@ defmt = ["dep:defmt", "noshell-parser/defmt"]
 [dependencies]
 defmt = { workspace = true, optional = true }
 heapless = { workspace = true }
+nom = { workspace = true }
 thiserror = { workspace = true }
 
 noterm = { version = "0.1.0", path = "../../noterm" }
@@ -25,4 +26,5 @@ noshell-macros = { path = "../noshell-macros", version = "0.2.0" }
 noshell-parser = { path = "../noshell-parser", version = "0.2.0" }
 
 [dev-dependencies]
-googletest = { workspace = true }
+rstest = "0.26.1"
+speculoos = "0.13.0"
