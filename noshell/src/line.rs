@@ -11,6 +11,13 @@ use noterm::style::Print;
 use noterm::{Executable, Queuable};
 
 use crate::prompt::Prompt;
+use crate::unescape;
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+extern crate std;
 
 /// Error.
 #[derive(Debug, thiserror::Error)]
@@ -35,7 +42,7 @@ pub async fn readline<OutputTy, EventsTy, ContentTy, const SIZE: usize>(
 ) -> Result<String<SIZE>>
 where
     OutputTy: Write,
-    EventsTy: Stream<Item = Event>,
+    EventsTy: Stream<Item = noterm::io::Result<Event>>,
     ContentTy: Iterator + Clone,
     <ContentTy as Iterator>::Item: fmt::Display,
 {
@@ -52,39 +59,48 @@ where
     let mut escaped = false;
 
     loop {
-        if let Some(event) = events.next().await {
-            match event {
-                Event::Key(KeyEvent {
-                    code: KeyCode::Enter,
-                    modifiers: _,
-                    kind: _,
-                }) if !escaped => break,
+        match events.next().await {
+            Some(Ok(event)) => {
+                #[cfg(test)]
+                println!("event: {:?}", event);
 
-                Event::Key(KeyEvent {
-                    code,
-                    modifiers: _,
-                    kind: _,
-                }) => match code {
-                    KeyCode::Enter if escaped => {
-                        output.queue(MoveToNextLine(1))?;
-                        output.queue(MoveRight(4))?;
-                        output.flush()?;
-                        escaped = false;
-                    }
+                match event {
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Enter,
+                        modifiers: _,
+                        kind: _,
+                    }) if !escaped => break,
 
-                    KeyCode::Char(c) => {
-                        let _ = line.push(c);
-                        output.execute(Print(c))?;
-                        escaped = c == '\\';
-                    }
+                    Event::Key(KeyEvent {
+                        code,
+                        modifiers: _,
+                        kind: _,
+                    }) => match code {
+                        KeyCode::Enter if escaped => {
+                            let _ = line.push('\n');
+                            output.queue(MoveToNextLine(1))?;
+                            output.queue(MoveRight(4))?;
+                            output.flush()?;
+                            escaped = false;
+                        }
+
+                        KeyCode::Char(c) => {
+                            let _ = line.push(c);
+                            output.execute(Print(c))?;
+                            escaped = c == '\\';
+                        }
+
+                        _ => {}
+                    },
 
                     _ => {}
-                },
-
-                _ => {}
+                }
             }
+
+            Some(Err(err)) => return Err(Error::from(err)),
+            None => break,
         }
     }
 
-    Ok(line)
+    Ok(unescape::<SIZE>(&line))
 }

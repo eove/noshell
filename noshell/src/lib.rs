@@ -229,14 +229,15 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case(r#""#, "")]
-    #[case(r#"'"#, "'")]
-    #[case(r#"''"#, "''")]
-    #[case(r#"word"#, "word")]
-    #[case(r#"\$word"#, "$word")]
-    #[case(r#"\\word"#, "\\word")]
-    #[case(r#"\"word"#, "\"word")]
-    #[case(r#"\x33word"#, "\\x33word")]
+    #[case::empty(r#""#, "")]
+    #[case::quote(r#"'"#, "'")]
+    #[case::double_quote(r#"''"#, "''")]
+    #[case::single_quoted(r#"word"#, "word")]
+    #[case::special_dollar(r#"\$word"#, "$word")]
+    #[case::special_backslash(r#"\\word"#, "\\word")]
+    #[case::special_double_quote(r#"\"word"#, "\"word")]
+    #[case::hex(r#"\x33word"#, "\\x33word")]
+    #[case::multiline("word0 \\\nword1", "word0 word1")]
     fn it_should_unescape_string(#[case] input: &str, #[case] expected: &str) {
         assert_that!(unescape::<256>(input).as_str()).is_equal_to(expected);
     }

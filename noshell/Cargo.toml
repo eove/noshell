@@ -27,5 +27,7 @@ noshell-parser = { path = "../noshell-parser", version = "0.2.0" }
 futures = { version = "0.3.31", default-features = false }
 
 [dev-dependencies]
+insta = "1.46.0"
 rstest = "0.26.1"
 speculoos = "0.13.0"
+tokio = { version = "1.49.0", features = ["full"] }
