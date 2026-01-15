@@ -18,11 +18,12 @@ help:
 # Build sources (cargo build).
 [group('build')]
 build *OPTS:
-    cargo build {{ OPTS }}
+    cargo build --workspace {{ OPTS }}
 
-# Build sources in release mode (cargo build --release).
+# Build sources (cargo build).
 [group('build')]
-build-release *OPTS: && (build OPTS "--release")
+build-pkg pkg *OPTS:
+    cargo build -p {{ pkg }} {{ OPTS }}
 
 # Check if sources are compliant with lint rules (cargo clippy).
 [group('quality')]
@@ -39,6 +40,14 @@ format *OPTS:
     nix fmt {{ OPTS }}
 
 alias fmt := format
+
+# Test all.
+test *OPTS:
+    cargo nextest run --workspace {{ OPTS }}
+
+# Test package.
+test-pkg pkg *OPTS:
+    cargo nextest run -p {{ pkg }} {{ OPTS }}
 
 # Clean the cargo build artifacts.
 [group('utility')]
