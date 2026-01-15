@@ -14,12 +14,7 @@ readme.workspace = true
 heapless = "0.8.0"
 
 defmt = { workspace = true, optional = true }
-thiserror.workspace = true
+thiserror = { workspace = true }
 
 [dev-dependencies]
-googletest.workspace = true
-
-[features]
-default = []
-
-defmt = ["dep:defmt"]
+googletest = { workspace = true }

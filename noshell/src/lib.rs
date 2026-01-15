@@ -1,11 +1,18 @@
 //! noshell, a `no_std` argument parser and a shell for constrained systems.
-#![no_std]
+#![cfg_attr(not(test), no_std)]
+#![allow(async_fn_in_trait)]
 #![deny(missing_docs)]
 
 pub use noshell_macros as macros;
 pub use noshell_parser as parser;
 
 pub use macros::Parser;
+// use noterm::io::blocking::Write;
+
+pub mod cmdline;
+
+#[cfg(test)]
+mod tests;
 
 /// Defines the possible errors that may occur during usage of the crate.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -15,210 +22,161 @@ pub enum Error {
     /// An error comes from the parsing of arguments.
     #[error(transparent)]
     Parser(#[from] parser::Error),
+
+    /// Command not found.
+    #[error("command not found")]
+    CommandNotFound,
+
+    /// Invalid utf8 string.
+    #[error("invalid utf8 string")]
+    Utf8,
+
+    /// Unknown error, for development only.
+    #[error("unknown error")]
+    Unknown,
 }
 
-#[cfg(test)]
-mod tests {
-    use googletest::prelude::{assert_that, eq};
+// /// Command trait.
+// pub trait Callback {
+//     /// Execute the callback.
+//     fn call(&mut self, input: &str);
+// }
 
-    use crate as noshell;
+// /// Command.
+// pub struct Command<'a, OutputTy: Write>(pub(crate) TypedCommand<'a, dyn Callback + 'a, OutputTy>);
 
-    #[test]
-    fn it_should_parse_args_with_simple_type() {
-        #[derive(Debug, noshell::Parser)]
-        struct MyArgs {
-            value: u32,
-        }
+// pub(crate) struct TypedCommand<'a, CalleeTy: Callback + ?Sized, OutputTy: Write> {
+//     callee: &'a CalleeTy,
+// }
 
-        let argv = &["--value", "233"];
-        let res = MyArgs::parse(argv);
+// /// Command.
+// pub struct Command(pub(crate) Call)
 
-        assert_that!(res.is_ok());
+// /// Callback inner function type.
+// pub struct CallbackImpl<'a, CalleeTy, OutputTy>
+// where
+//     CalleeTy: FnMut(&str, &mut OutputTy),
+//     OutputTy: Write,
+// {
+//     inner: CalleeTy,
+//     output: &'a mut OutputTy,
+// }
 
-        let args = res.unwrap();
-        assert_that!(args.value, eq(233));
-    }
+// impl<'a, CalleeTy, OutputTy> CallbackImpl<'a, CalleeTy, OutputTy>
+// where
+//     CalleeTy: FnMut(&str, &mut OutputTy),
+//     OutputTy: Write,
+// {
+//     /// Create a new callback.
+//     pub fn new(inner: CalleeTy, output: &'a mut OutputTy) -> Self {
+//         CallbackImpl { inner, output }
+//     }
+// }
 
-    #[test]
-    fn it_should_parse_args_with_option_type() {
-        #[derive(Debug, noshell::Parser)]
-        struct MyArgs {
-            value: Option<u32>,
-        }
+// impl<CalleeTy, OutputTy> Callback for CallbackImpl<'_, CalleeTy, OutputTy>
+// where
+//     CalleeTy: FnMut(&str, &mut OutputTy),
+//     OutputTy: Write,
+// {
+//     fn execute(&mut self, input: &str) {
+//         (self.inner)(input, self.output)
+//     }
+// }
 
-        let argv = &[];
-        let res = MyArgs::parse(argv);
+// /// Parse top-level commands.
+// pub fn lookup_in_static_entries<'a>(name: &str) -> Result<&'a mut Command<'static>, Error> {
+//     let entries: &'static mut [Command<'static>] = unsafe {
+//         let start = (&NOSHELL_COMMANDS_START as *const u32)
+//             .cast::<Command<'static>>()
+//             .cast_mut();
 
-        assert_that!(res.is_ok(), eq(true));
+//         let end = (&NOSHELL_COMMANDS_END as *const u32)
+//             .cast::<Command<'static>>()
+//             .cast_mut();
 
-        let args = res.unwrap();
-        assert_that!(args.value, eq(None));
+//         let len = (end as usize) - (start as usize);
 
-        let argv = &["--value", "233"];
-        let res = MyArgs::parse(argv);
+//         core::slice::from_raw_parts_mut(start, len)
+//     };
 
-        assert_that!(res.is_ok(), eq(true));
+//     entries
+//         .iter_mut()
+//         .find(|entry| name == entry.name)
+//         .ok_or(Error::CommandNotFound)
+// }
 
-        let args = res.unwrap();
-        assert_that!(args.value, eq(Some(233)));
-    }
+// unsafe extern "C" {
+//     static NOSHELL_COMMANDS_START: u32;
+//     static NOSHELL_COMMANDS_END: u32;
+// }
 
-    #[test]
-    fn it_should_parse_args_with_option_option_type() {
-        #[derive(Debug, noshell::Parser)]
-        struct MyArgs {
-            value: Option<Option<u32>>,
-        }
+// /// Character write trait.
+// pub trait Write {
+//     /// Error type.
+//     type Error;
 
-        let argv = &[];
-        let res = MyArgs::parse(argv);
+//     /// Write the given data to the underlying byte stream.
+//     async fn write(&mut self, data: &[u8]) -> Result<usize, Self::Error>;
+// }
 
-        assert_that!(res.is_ok(), eq(true));
+// /// Character read trait.
+// pub trait Read {
+//     /// Error type;
+//     type Error;
 
-        let args = res.unwrap();
-        assert_that!(args.value, eq(None));
+//     /// Read some data from the underlying byte stream.
+//     async fn read(&self, data: &mut [u8]) -> Result<usize, Self::Error>;
+// }
 
-        let argv = &["--value"];
-        let res = MyArgs::parse(argv);
+// /// Run the shell.
+// pub async fn run<IO: Read + Write>(mut io: IO) -> Result<(), Error> {
+//     let mut input = [0u8; 1024];
+//     let mut output = [0u8; 1024];
 
-        assert_that!(res.is_ok(), eq(true));
+//     let mut cursor = 0;
 
-        let args = res.unwrap();
-        assert_that!(args.value, eq(Some(None)));
-    }
+//     loop {
+//         'restart: {
+//             let cmdline = loop {
+//                 match io.read(&mut input[cursor..]).await {
+//                     Ok(len) => {
+//                         if let Some(eol) = input[cursor..cursor + len]
+//                             .iter()
+//                             .position(|&x| x as char == '\n')
+//                         {
+//                             let end = cursor + eol;
+//                             cursor = 0;
 
-    #[test]
-    fn it_should_parse_args_with_option_vec_type() {
-        use heapless::Vec;
+//                             let cmdline = str::from_utf8(&input[..end]).map_err(|_| Error::Utf8)?;
 
-        #[derive(Debug, noshell::Parser)]
-        struct MyArgs {
-            value: Option<Vec<u32, 8>>,
-        }
+//                             break cmdline;
+//                         } else {
+//                             cursor += len;
 
-        // No argument.
-        let argv = &[];
-        let res = MyArgs::parse(argv);
+//                             if cursor >= input.len() {
+//                                 cursor = 0;
+//                                 break 'restart;
+//                             }
+//                         }
+//                     }
 
-        assert_that!(res.is_ok(), eq(true));
+//                     Err(_) => {
+//                         cursor = 0;
+//                         break 'restart;
+//                     }
+//                 }
+//             };
 
-        let args = res.unwrap();
-        assert_that!(args.value.is_none(), eq(true));
+//             let Some(name) = cmdline.split(" ").next() else {
+//                 break 'restart;
+//             };
 
-        // Argument without value.
-        let argv = &["--value"];
-        let res = MyArgs::parse(argv);
+//             let Ok(cmd) = lookup_in_static_entries(name) else {
+//                 break 'restart;
+//             };
 
-        assert_that!(res.is_ok(), eq(false));
-
-        // Argument with single value.
-        let argv = &["--value", "23"];
-        let res = MyArgs::parse(argv);
-
-        assert_that!(res.is_ok(), eq(true));
-        let args = res.unwrap();
-
-        assert_that!(args.value.is_some(), eq(true));
-        let vals = args.value.unwrap();
-
-        assert_that!(vals.is_empty(), eq(false));
-        assert_that!(vals.first().unwrap(), eq(&23));
-
-        // Argument with multiple values.
-        let argv = &["--value", "23", "42", "72"];
-        let res = MyArgs::parse(argv);
-
-        assert_that!(res.is_ok(), eq(true));
-        let args = res.unwrap();
-
-        assert_that!(args.value.is_some(), eq(true));
-        let vals = args.value.unwrap();
-
-        assert_that!(vals.is_empty(), eq(false));
-        let mut iter = vals.iter();
-
-        assert_that!(iter.next().unwrap(), eq(&23));
-        assert_that!(iter.next().unwrap(), eq(&42));
-        assert_that!(iter.next().unwrap(), eq(&72));
-        assert_that!(iter.next(), eq(None));
-    }
-
-    #[test]
-    #[should_panic]
-    fn it_should_panic_at_parsing_args_with_option_vec_type() {
-        use heapless::Vec;
-
-        #[derive(Debug, noshell::Parser)]
-        struct MyArgs {
-            #[allow(unused)]
-            value: Option<Vec<u32, 4>>,
-        }
-
-        // Argument with too much values.
-        let argv = &["--value", "1", "2", "3", "4", "5"];
-        let _ = MyArgs::parse(argv);
-    }
-
-    #[test]
-    fn it_should_parse_args_with_vec_type() {
-        use heapless::Vec;
-
-        #[derive(Debug, noshell::Parser)]
-        struct MyArgs {
-            value: Vec<u32, 8>,
-        }
-
-        // No argument.
-        let argv = &[];
-        let res = MyArgs::parse(argv);
-
-        assert_that!(res.is_ok(), eq(false));
-
-        // Argument without value.
-        let argv = &["--value"];
-        let res = MyArgs::parse(argv);
-
-        assert_that!(res.is_ok(), eq(false));
-
-        // Argument with single value.
-        let argv = &["--value", "23"];
-        let res = MyArgs::parse(argv);
-
-        assert_that!(res.is_ok(), eq(true));
-        let args = res.unwrap();
-
-        assert_that!(args.value.is_empty(), eq(false));
-        assert_that!(args.value.first().unwrap(), eq(&23));
-
-        // Argument with multiple values.
-        let argv = &["--value", "23", "42", "72"];
-        let res = MyArgs::parse(argv);
-
-        assert_that!(res.is_ok(), eq(true));
-        let args = res.unwrap();
-
-        assert_that!(args.value.is_empty(), eq(false));
-        let mut iter = args.value.iter();
-
-        assert_that!(iter.next().unwrap(), eq(&23));
-        assert_that!(iter.next().unwrap(), eq(&42));
-        assert_that!(iter.next().unwrap(), eq(&72));
-        assert_that!(iter.next(), eq(None));
-    }
-
-    #[test]
-    #[should_panic]
-    fn it_should_panic_at_parsing_args_with_vec_type() {
-        use heapless::Vec;
-
-        #[derive(Debug, noshell::Parser)]
-        struct MyArgs {
-            #[allow(unused)]
-            value: Vec<u32, 4>,
-        }
-
-        // Argument with too much values.
-        let argv = &["--value", "1", "2", "3", "4", "5"];
-        let _ = MyArgs::parse(argv);
-    }
-}
+//             let len = cmd.run(cmdline, &mut output);
+//             io.write(&output[..len]).await.ok();
+//         }
+//     }
+// }

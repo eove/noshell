@@ -10,6 +10,9 @@ mod derive;
 mod helpers;
 mod ty;
 
+#[cfg(test)]
+mod tests;
+
 /// `Parser` derive macro.
 #[proc_macro_derive(Parser, attributes(arg))]
 pub fn derive_parser(item: TokenStream) -> TokenStream {

@@ -21,3 +21,4 @@ syn = { version = "2.0.99", features = ["full"] }
 
 [dev-dependencies]
 anyhow = "1.0.97"
+insta = "1.46.0"

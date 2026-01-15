@@ -20,6 +20,13 @@
         inputs.treefmt-nix.flakeModule
       ];
 
+      # Applied systems.
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+
+      # Per-system configuration.
       perSystem =
         { pkgs, system, ... }:
 
@@ -85,6 +92,7 @@
               # Build dependencies.
               bacon
               cargo-deny
+              cargo-insta
               cargo-nextest
               cargo-semver-checks
               clippy
@@ -96,13 +104,5 @@
             ];
           };
         };
-
-      # Applied systems.
-      systems = [
-        "x86_64-linux"
-        "aarch64-linux"
-        "x86_64-darwin"
-        "aarch64-darwin"
-      ];
     };
 }

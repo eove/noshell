@@ -96,40 +96,43 @@ impl Token<'_> {
 /// A lexer acts like an forward iterator.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct Tokens<'a> {
-    argv: &'a [&'a str],
-    cursor: usize,
+pub struct Tokens<'a, IterTy>
+where
+    IterTy: Iterator<Item = &'a str>,
+{
+    iter: IterTy,
 }
 
-impl<'a> Tokens<'a> {
+impl<'a, IterTy> Tokens<'a, IterTy>
+where
+    IterTy: Iterator<Item = &'a str> + Clone,
+{
     /// Create a new lexer from the command line input.
-    pub fn new(argv: &'a [&'a str]) -> Self {
-        Tokens { argv, cursor: 0 }
+    pub fn new(iter: IterTy) -> Self {
+        Tokens { iter }
     }
 
     /// Retreive an iterator to the next value tokens.
     #[inline(always)]
-    pub fn values(&self) -> Values<'a> {
-        Values::new(&self.argv[self.cursor..])
+    pub fn values(&self) -> Values<'a, IterTy> {
+        Values::new(self.iter.clone())
     }
 
     /// Retreive an iterator to the next tokens.
     #[inline(always)]
     pub fn tokens(&self) -> Self {
-        Tokens::new(&self.argv[self.cursor..])
+        Tokens::new(self.iter.clone())
     }
 }
 
-impl<'a> Iterator for Tokens<'a> {
+impl<'a, IterTy> Iterator for Tokens<'a, IterTy>
+where
+    IterTy: Iterator<Item = &'a str>,
+{
     type Item = Token<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.cursor >= self.argv.len() {
-            return None;
-        }
-
-        let arg = self.argv[self.cursor];
-        self.cursor += 1;
+        let arg = self.iter.next()?;
 
         // Long flag.
         if arg.starts_with("--") && arg.len() >= 3 {
@@ -154,54 +157,35 @@ impl<'a> Iterator for Tokens<'a> {
     }
 }
 
-/// A trait for creating a [`Tokens`] iterator from other types.
-pub trait IntoTokens<'a> {
-    /// Convert into the iterator.
-    fn into_tokens(self) -> Tokens<'a>;
-}
-
-impl<'a> IntoTokens<'a> for Tokens<'a> {
-    fn into_tokens(self) -> Tokens<'a> {
-        self
-    }
-}
-
-impl<'a> IntoTokens<'a> for &'a [&'a str] {
-    fn into_tokens(self) -> Tokens<'a> {
-        Tokens::new(self)
-    }
-}
-
 /// A iterator over value tokens.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct Values<'a> {
-    argv: &'a [&'a str],
-    cursor: usize,
+pub struct Values<'a, IterTy>
+where
+    IterTy: Iterator<Item = &'a str>,
+{
+    iter: IterTy,
     done: bool,
 }
 
-impl<'a> Values<'a> {
+impl<'a, IterTy> Values<'a, IterTy>
+where
+    IterTy: Iterator<Item = &'a str>,
+{
     /// Create a value iterator from the given cursor.
-    pub fn new(argv: &'a [&'a str]) -> Self {
-        Values {
-            argv,
-            cursor: 0,
-            done: false,
-        }
+    pub fn new(iter: IterTy) -> Self {
+        Values { iter, done: false }
     }
 }
 
-impl<'a> Iterator for Values<'a> {
+impl<'a, IterTy> Iterator for Values<'a, IterTy>
+where
+    IterTy: Iterator<Item = &'a str>,
+{
     type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.done || self.cursor >= self.argv.len() {
-            return None;
-        }
-
-        let arg = self.argv[self.cursor];
-        self.cursor += 1;
+        let arg = self.iter.next()?;
 
         if Token::is_flag(arg) {
             self.done = true;
@@ -220,7 +204,7 @@ mod tests {
 
     #[test]
     fn it_should_match_short_flag() {
-        let mut lexer = Tokens::new(&["-f"]);
+        let mut lexer = Tokens::new(["-f"].into_iter());
 
         let token = lexer.next();
         assert_that!(token.is_some(), eq(true));
@@ -229,7 +213,7 @@ mod tests {
 
     #[test]
     fn it_should_match_value_starting_with_dash() {
-        let mut lexer = Tokens::new(&["-flag"]);
+        let mut lexer = Tokens::new(["-flag"].into_iter());
 
         let token = lexer.next();
         assert_that!(token.is_some(), eq(true));
@@ -238,7 +222,7 @@ mod tests {
 
     #[test]
     fn it_should_match_long_flag() {
-        let mut lexer = Tokens::new(&["--flag"]);
+        let mut lexer = Tokens::new(["--flag"].into_iter());
 
         let token = lexer.next();
         assert_that!(token.is_some(), eq(true));
@@ -247,7 +231,8 @@ mod tests {
 
     #[test]
     fn it_should_match_numbers() {
-        let lexer = Tokens::new(&["-2", "2", "-2.", "2.", "-2.e1", "2.e1", "-2e1", "2e1"]);
+        let lexer =
+            Tokens::new(["-2", "2", "-2.", "2.", "-2.e1", "2.e1", "-2e1", "2e1"].into_iter());
 
         for token in lexer {
             assert_that!(token, matches_pattern!(&Token::Value(_)));

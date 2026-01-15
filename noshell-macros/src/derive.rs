@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote, quote_spanned};
+use syn::Ident;
 use syn::ext::IdentExt;
 use syn::{
     Data, DataStruct, DeriveInput, Expr, ExprLit, Fields, FieldsNamed, Lit, LitStr,
@@ -42,26 +43,38 @@ pub fn try_run(input: &DeriveInput) -> Result<TokenStream, syn::Error> {
             ..
         }) => {
             let args = collect_args_meta(fields)?;
-            let init = build_args_init(&args)?;
+            let init = build_args_init(&args, format_ident!("args"))?;
 
             let (ids_ty, ids) = parse_and_build_arg_ids(&args)?;
 
             let attrs = Attr::parse_all(&input.attrs)?;
-            let limit = get_noshell_attr_limit_arg_value(&attrs)?.unwrap_or(PARSER_ARG_COUNT_MAX);
+            let size = get_noshell_attr_limit_arg_value(&attrs)?.unwrap_or(PARSER_ARG_COUNT_MAX);
 
             Ok(quote! {
                 impl #ident {
-                    pub fn parse<'a>(__argv: &'a [&'a str]) -> Result<Self, noshell::Error> {
+                    pub fn try_parse_from<'a, IterTy>(input: IterTy) -> Result<Self, noshell::Error>
+                    where
+                        IterTy: Iterator<Item = &'a str> + Clone,
+                    {
                         use noshell::parser::ParsedArgs;
 
-                        let __ids = Self::ids();
-                        let __tokens = noshell::parser::Tokens::new(__argv);
-                        let __args: ParsedArgs<'_, #limit> = noshell::parser::ParsedArgs::parse(__tokens, __ids);
+                        let flags = Self::parsed_flag_ids();
+                        let args = ParsedArgs::<'_, _, #size>::try_parse_from(input, flags.iter())?;
 
                         Ok(#ident #init)
                     }
 
-                    pub fn ids() -> &'static [(noshell::parser::lexer::Flag<'static>, &'static str)] {
+                    pub fn parse_from<'a, IterTy>(iter: IterTy) -> Self
+                    where
+                        IterTy: Iterator<Item = &'a str> + Clone,
+                    {
+                        Self::try_parse_from(iter).expect("should parse arguments from iterator")
+                    }
+
+                    pub fn parsed_flag_ids() -> &'static [
+                        (noshell::parser::lexer::Flag<'static>, &'static str)
+                    ]
+                    {
                         static IDS: #ids_ty = #ids;
                         &IDS
                     }
@@ -91,10 +104,10 @@ fn collect_args_meta(fields: &FieldsNamed) -> Result<Vec<MetaArg>, syn::Error> {
     Ok(meta)
 }
 
-fn build_args_init(fields: &[MetaArg]) -> Result<TokenStream, syn::Error> {
+fn build_args_init(fields: &[MetaArg], ident: Ident) -> Result<TokenStream, syn::Error> {
     let args = fields
         .iter()
-        .map(build_arg_parser)
+        .map(|x| build_arg_parser(x, ident.clone()))
         .collect::<Result<Vec<_>, syn::Error>>()?;
 
     Ok(quote! {{
@@ -104,23 +117,22 @@ fn build_args_init(fields: &[MetaArg]) -> Result<TokenStream, syn::Error> {
     }})
 }
 
-fn build_arg_parser(arg: &MetaArg) -> Result<TokenStream, syn::Error> {
+fn build_arg_parser(arg: &MetaArg, args_ident: Ident) -> Result<TokenStream, syn::Error> {
     let ty = &arg.ty;
     let inner_ty = get_inner_ty(ty);
 
-    let args = format_ident!("__args");
     let try_get_one = quote_spanned!(inner_ty.span()=> try_get_one::<#inner_ty>);
     let try_get_many = quote_spanned!(inner_ty.span()=> try_get_many::<_, #inner_ty>);
 
-    let ident = arg.id.unraw();
-    let id = ident.to_string();
+    let arg_ident = arg.id.unraw();
+    let arg_id = arg_ident.to_string();
 
     let value = match Ty::from_syn_ty(ty) {
         // Optional argument with required value.
         Ty::Option => quote_spanned! { ty.span()=>
-            if #args.contains(#id) {
+            if #args_ident.contains(#arg_id) {
                 Some(
-                    #args.#try_get_one(#id)
+                    #args_ident.#try_get_one(#arg_id)
                         .map(Option::unwrap)
                         .and_then(noshell::parser::utils::check_value_is_missing)
                         .map(Option::unwrap)?
@@ -132,9 +144,9 @@ fn build_arg_parser(arg: &MetaArg) -> Result<TokenStream, syn::Error> {
 
         // Optional argument with optional value.
         Ty::OptionOption => quote_spanned! { ty.span()=>
-            if #args.contains(#id) {
+            if #args_ident.contains(#arg_id) {
                 Some(
-                    #args.#try_get_one(#id).map(Option::flatten)?
+                    #args_ident.#try_get_one(#arg_id).map(Option::flatten)?
                 )
             } else {
                 None
@@ -143,9 +155,9 @@ fn build_arg_parser(arg: &MetaArg) -> Result<TokenStream, syn::Error> {
 
         // Optional argument with required non-empty sequence of values.
         Ty::OptionVec => quote_spanned! { ty.span()=>
-            if #args.contains(#id) {
+            if #args_ident.contains(#arg_id) {
                 Some(
-                    #args.#try_get_many(#id)
+                    #args_ident.#try_get_many(#arg_id)
                         .map(Option::unwrap)
                         .and_then(noshell::parser::utils::check_vec_is_missing)?
                 )
@@ -156,7 +168,7 @@ fn build_arg_parser(arg: &MetaArg) -> Result<TokenStream, syn::Error> {
 
         // Required argument with required non-empty sequence of values.
         Ty::Vec => quote_spanned! { ty.span()=>
-            #args.#try_get_many(#id)
+            #args_ident.#try_get_many(#arg_id)
                 .and_then(noshell::parser::utils::check_arg_is_missing)
                 .map(Option::unwrap)
                 .and_then(noshell::parser::utils::check_vec_is_missing)?
@@ -164,7 +176,7 @@ fn build_arg_parser(arg: &MetaArg) -> Result<TokenStream, syn::Error> {
 
         // Required argument with required value.
         Ty::Simple => quote_spanned! { ty.span()=>
-            #args.#try_get_one(#id)
+            #args_ident.#try_get_one(#arg_id)
                 .and_then(noshell::parser::utils::check_arg_is_missing)
                 .map(Option::unwrap)
                 .and_then(noshell::parser::utils::check_value_is_missing)
@@ -173,7 +185,7 @@ fn build_arg_parser(arg: &MetaArg) -> Result<TokenStream, syn::Error> {
     };
 
     Ok(quote_spanned! { arg.span=>
-        #ident: #value
+        #arg_ident: #value
     })
 }
 
@@ -388,6 +400,8 @@ fn parse_and_build_arg_ids(args: &[MetaArg]) -> Result<(TokenStream, TokenStream
 mod tests {
     use syn::Field;
 
+    use crate::tests::utils::format_rust_token_stream;
+
     use super::*;
 
     #[test]
@@ -536,7 +550,7 @@ mod tests {
 
         let attrs = Attr::parse_all(&field.attrs)?;
         let meta = MetaArg::new(&field, attrs);
-        let given = build_arg_parser(&meta)?;
+        let given = build_arg_parser(&meta, format_ident!("__args"))?;
 
         let expected = quote!(
             value: __args.try_get_one::<u32>("value")
@@ -557,7 +571,7 @@ mod tests {
 
         let attrs = Attr::parse_all(&field.attrs)?;
         let meta = MetaArg::new(&field, attrs);
-        let given = build_arg_parser(&meta)?;
+        let given = build_arg_parser(&meta, format_ident!("__args"))?;
 
         let expected = quote!(
             value: if __args.contains("value") {
@@ -583,7 +597,7 @@ mod tests {
 
         let attrs = Attr::parse_all(&field.attrs)?;
         let meta = MetaArg::new(&field, attrs);
-        let given = build_arg_parser(&meta)?;
+        let given = build_arg_parser(&meta, format_ident!("__args"))?;
 
         let expected = quote!(value:
             if __args.contains("value") {
@@ -606,7 +620,7 @@ mod tests {
 
         let attrs = Attr::parse_all(&field.attrs)?;
         let meta = MetaArg::new(&field, attrs);
-        let given = build_arg_parser(&meta)?;
+        let given = build_arg_parser(&meta, format_ident!("__args"))?;
 
         let expected = quote!(value:
             if __args.contains("value") {
@@ -631,7 +645,7 @@ mod tests {
 
         let attrs = Attr::parse_all(&field.attrs)?;
         let meta = MetaArg::new(&field, attrs);
-        let given = build_arg_parser(&meta)?;
+        let given = build_arg_parser(&meta, format_ident!("__args"))?;
 
         let expected = quote!(
             value: __args.try_get_many::<_, u32>("value")
@@ -654,43 +668,8 @@ mod tests {
             }
         };
 
-        let given = try_run(&derive)?;
-
-        let expected = quote! {
-            impl MyArgs {
-                pub fn parse<'a>(__argv: &'a [&'a str]) -> Result<Self, noshell::Error> {
-                    use noshell::parser::ParsedArgs;
-
-                    let __ids = Self::ids();
-                    let __tokens = noshell::parser::Tokens::new(__argv);
-                    let __args: ParsedArgs<'_, 16usize> = noshell::parser::ParsedArgs::parse(__tokens, __ids);
-
-                    Ok(MyArgs {
-                        value1: __args.try_get_one::<u32>("value1")
-                            .and_then(noshell::parser::utils::check_arg_is_missing)
-                            .map(Option::unwrap)
-                            .and_then(noshell::parser::utils::check_value_is_missing)
-                            .map(Option::unwrap)?,
-
-                        value2: __args.try_get_one::<u32>("value2")
-                            .and_then(noshell::parser::utils::check_arg_is_missing)
-                            .map(Option::unwrap)
-                            .and_then(noshell::parser::utils::check_value_is_missing)
-                            .map(Option::unwrap)?
-                    })
-                }
-
-                pub fn ids() -> &'static [(noshell::parser::lexer::Flag<'static>, &'static str)] {
-                    static IDS: [(noshell::parser::lexer::Flag<'static>, &'static str); 2usize] = [
-                        (noshell::parser::lexer::Flag::Long("value1"), "value1"),
-                        (noshell::parser::lexer::Flag::Long("value2"), "value2"),
-                    ];
-                    &IDS
-                }
-            }
-        };
-
-        assert_eq!(expected.to_string(), given.to_string());
+        let output = format_rust_token_stream(try_run(&derive)?);
+        insta::assert_snapshot!(output);
 
         Ok(())
     }
