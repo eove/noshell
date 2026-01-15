@@ -15,28 +15,30 @@ mod init 'just/init.just'
 help:
     just --list
 
-# Build the current workspace using the given PROFILE.
+# Build sources (cargo build).
 [group('build')]
-build PROFILE *OPTS:
-    #!/usr/bin/env bash
-    readonly PROFILES=( "dev" "release" )
+build *OPTS:
+    cargo build {{ OPTS }}
 
-    validate() {
-        local lookup="$1"
+# Build sources in release mode (cargo build --release).
+[group('build')]
+build-release *OPTS: && (build OPTS "--release")
 
-        for value in "${PROFILES[@]}"; do
-            [[ x"${lookup}" == x"${value}" ]] && return 0
-        done
+# Check if sources are compliant with lint rules (cargo clippy).
+[group('quality')]
+lint *OPTS:
+    cargo clippy --workspace {{ OPTS }} -- -D warnings
 
-        return 1
-    }
+# Check if sources are compliant with lint rules (cargo clippy --fix).
+[group('quality')]
+fix *OPTS: && (lint OPTS "--fix")
 
-    validate "{{ PROFILE }}" || {
-        echo "error: invalid profile '{{ PROFILE }}'"
-        exit 1
-    }
+# Format source code (nix fmt).
+[group('quality')]
+format *OPTS:
+    nix fmt {{ OPTS }}
 
-    nix build {{ OPTS }} '.#{{ PROFILE }}'
+alias fmt := format
 
 # Clean the cargo build artifacts.
 [group('utility')]
