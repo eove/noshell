@@ -10,8 +10,10 @@ use noterm::io::blocking::Write;
 use noterm::style::Print;
 use noterm::{Executable, Queuable};
 
-use crate::prompt::Prompt;
-use crate::unescape;
+pub mod lexer;
+pub mod prompt;
+
+pub use prompt::Prompt;
 
 #[cfg(test)]
 mod tests;
@@ -103,4 +105,39 @@ where
     }
 
     Ok(unescape::<SIZE>(&line))
+}
+
+fn unescape<const SIZE: usize>(input: &str) -> heapless::String<SIZE> {
+    let (acc, _) =
+        input.chars().fold(
+            (heapless::String::new(), false),
+            |(mut acc, escaped), c| match escaped {
+                // If the character is escaped and is special, consume it as unescaped.
+                true if ['$', '"', '\\'].contains(&c) => {
+                    let _ = acc.push(c);
+                    (acc, false)
+                }
+
+                // If the character is a newline, preceded by a backslash, discard both.
+                true if '\n' == c => (acc, false),
+
+                // If the character is escaped but not special, consume it as escaped.
+                true => {
+                    let _ = acc.push('\\');
+                    let _ = acc.push(c);
+                    (acc, false)
+                }
+
+                // If character is not a backslash, then consume it.
+                false if c != '\\' => {
+                    let _ = acc.push(c);
+                    (acc, false)
+                }
+
+                // If the character is a backslash, discard it but keep memory of it.
+                false => (acc, true),
+            },
+        );
+
+    acc
 }

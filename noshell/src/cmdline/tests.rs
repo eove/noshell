@@ -4,7 +4,21 @@ use speculoos::prelude::*;
 
 use noterm::{events, io};
 
-use crate::{line::readline, prompt::Prompt};
+use super::{Prompt, readline, unescape};
+
+#[rstest]
+#[case::empty(r#""#, "")]
+#[case::quote(r#"'"#, "'")]
+#[case::double_quote(r#"''"#, "''")]
+#[case::single_quoted(r#"word"#, "word")]
+#[case::special_dollar(r#"\$word"#, "$word")]
+#[case::special_backslash(r#"\\word"#, "\\word")]
+#[case::special_double_quote(r#"\"word"#, "\"word")]
+#[case::hex(r#"\x33word"#, "\\x33word")]
+#[case::multiline("word0 \\\nword1", "word0 word1")]
+fn it_should_unescape_string(#[case] input: &str, #[case] expected: &str) {
+    assert_that!(unescape::<256>(input).as_str()).is_equal_to(expected);
+}
 
 struct StringBuf {
     inner: String,

@@ -9,9 +9,7 @@ pub use noshell_parser as parser;
 pub use macros::Parser;
 // use noterm::io::blocking::Write;
 
-pub mod lexer;
-pub mod line;
-pub mod prompt;
+pub mod cmdline;
 
 /// Defines the possible errors that may occur during usage of the crate.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -33,45 +31,6 @@ pub enum Error {
     /// Unknown error, for development only.
     #[error("unknown error")]
     Unknown,
-}
-
-/// Unescape special characters in input string.
-///
-/// This requires allocating an output string to accumulate the resulting string. This is done
-/// using `heapless::String`.
-pub fn unescape<const SIZE: usize>(input: &str) -> heapless::String<SIZE> {
-    let (acc, _) =
-        input.chars().fold(
-            (heapless::String::new(), false),
-            |(mut acc, escaped), c| match escaped {
-                // If the character is escaped and is special, consume it as unescaped.
-                true if ['$', '"', '\\'].contains(&c) => {
-                    let _ = acc.push(c);
-                    (acc, false)
-                }
-
-                // If the character is a newline, preceded by a backslash, discard both.
-                true if '\n' == c => (acc, false),
-
-                // If the character is escaped but not special, consume it as escaped.
-                true => {
-                    let _ = acc.push('\\');
-                    let _ = acc.push(c);
-                    (acc, false)
-                }
-
-                // If character is not a backslash, then consume it.
-                false if c != '\\' => {
-                    let _ = acc.push(c);
-                    (acc, false)
-                }
-
-                // If the character is a backslash, discard it but keep memory of it.
-                false => (acc, true),
-            },
-        );
-
-    acc
 }
 
 // /// Command trait.
@@ -221,26 +180,9 @@ pub fn unescape<const SIZE: usize>(input: &str) -> heapless::String<SIZE> {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
     use speculoos::prelude::*;
 
     use crate as noshell;
-
-    use super::*;
-
-    #[rstest]
-    #[case::empty(r#""#, "")]
-    #[case::quote(r#"'"#, "'")]
-    #[case::double_quote(r#"''"#, "''")]
-    #[case::single_quoted(r#"word"#, "word")]
-    #[case::special_dollar(r#"\$word"#, "$word")]
-    #[case::special_backslash(r#"\\word"#, "\\word")]
-    #[case::special_double_quote(r#"\"word"#, "\"word")]
-    #[case::hex(r#"\x33word"#, "\\x33word")]
-    #[case::multiline("word0 \\\nword1", "word0 word1")]
-    fn it_should_unescape_string(#[case] input: &str, #[case] expected: &str) {
-        assert_that!(unescape::<256>(input).as_str()).is_equal_to(expected);
-    }
 
     #[test]
     fn it_should_parse_args_with_simple_type() {
