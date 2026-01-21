@@ -3,11 +3,11 @@
 #![allow(async_fn_in_trait)]
 #![deny(missing_docs)]
 
-pub use noshell_macros as macros;
-pub use noshell_parser as parser;
+#[cfg(feature = "parser")]
+pub use {macros::Parser, noshell_macros as macros, noshell_parser as parser};
 
-pub use macros::Parser;
-// use noterm::io::blocking::Write;
+#[cfg(feature = "events")]
+pub use noterm::events;
 
 pub mod cmdline;
 
@@ -20,6 +20,7 @@ mod tests;
 #[non_exhaustive]
 pub enum Error {
     /// An error comes from the parsing of arguments.
+    #[cfg(feature = "parser")]
     #[error(transparent)]
     Parser(#[from] parser::Error),
 

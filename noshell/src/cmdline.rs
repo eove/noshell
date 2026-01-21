@@ -3,11 +3,12 @@
 use core::fmt;
 
 use futures::{Stream, StreamExt, pin_mut};
-use heapless::String;
-use noterm::cursor::{MoveRight, MoveToNextLine};
-use noterm::events::{Event, KeyCode, KeyEvent};
-use noterm::io::blocking::Write;
+use heapless::{CapacityError, String};
+use noterm::cursor::{Home, MoveLeft, MoveRight, MoveToNextLine};
+use noterm::events::{Event, KeyCode, KeyEvent, KeyModifiers};
+use noterm::io;
 use noterm::style::Print;
+use noterm::terminal::{Clear, ClearType};
 use noterm::{Executable, Queuable};
 
 pub mod lexer;
@@ -28,6 +29,14 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] noterm::io::Error),
 
+    /// No more events from the stream.
+    #[error("no more events")]
+    NoMoreEvents,
+
+    /// No space left in line buffer.
+    #[error("no space left")]
+    NoSpaceLeft,
+
     /// Unknown error.
     #[error("unknown error")]
     Unknown,
@@ -38,18 +47,18 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 /// Read a line.
 pub async fn readline<OutputTy, EventsTy, ContentTy, const SIZE: usize>(
-    output: &mut OutputTy,
+    prompt: &Prompt<ContentTy>,
     events: EventsTy,
-    prompt: Prompt<ContentTy>,
+    output: &mut OutputTy,
 ) -> Result<String<SIZE>>
 where
-    OutputTy: Write,
-    EventsTy: Stream<Item = noterm::io::Result<Event>>,
+    OutputTy: io::blocking::Write,
+    EventsTy: Stream<Item = io::Result<Event>>,
     ContentTy: Iterator + Clone,
     <ContentTy as Iterator>::Item: fmt::Display,
 {
     // Prepare the output of the line.
-    let mut line: String<SIZE> = String::new();
+    let mut line: Line<SIZE> = Line::default();
 
     // Write the prompt, then read for input events.
     prompt.reset(output)?;
@@ -57,54 +66,181 @@ where
     // Pin the events, so that it stays on the stack while calling async/await.
     pin_mut!(events);
 
-    // Create the escaped state.
-    let mut escaped = false;
-
     loop {
         match events.next().await {
-            Some(Ok(event)) => {
-                #[cfg(test)]
-                println!("event: {:?}", event);
+            Some(Ok(event)) => match event {
+                Event::Key(key_event) => {
+                    if let Some(contents) = line.on_key_event(key_event, prompt, output)? {
+                        return Ok(unescape::<SIZE>(contents));
+                    };
+                }
+                Event::Cursor(_) => {}
+                Event::Screen(_) => {}
+            },
 
-                match event {
-                    Event::Key(KeyEvent {
-                        code: KeyCode::Enter,
-                        modifiers: _,
-                        kind: _,
-                    }) if !escaped => break,
+            Some(Err(err)) => return Err(Error::from(err)),
+            None => return Err(Error::NoMoreEvents),
+        }
+    }
+}
 
-                    Event::Key(KeyEvent {
-                        code,
-                        modifiers: _,
-                        kind: _,
-                    }) => match code {
-                        KeyCode::Enter if escaped => {
-                            let _ = line.push('\n');
-                            output.queue(MoveToNextLine(1))?;
-                            output.queue(MoveRight(4))?;
-                            output.flush()?;
-                            escaped = false;
-                        }
+#[derive(Debug, PartialEq, Eq, Hash)]
+enum LineStatus {
+    Done,
+    Pending,
+}
 
-                        KeyCode::Char(c) => {
-                            let _ = line.push(c);
-                            output.execute(Print(c))?;
-                            escaped = c == '\\';
-                        }
+#[derive(Debug, Default)]
+struct Line<const SIZE: usize = 256> {
+    escaped: bool,
+    buffer: String<SIZE>,
+    cursor: usize,
+}
 
-                        _ => {}
-                    },
+impl<const SIZE: usize> Line<SIZE> {
+    const _ASSERT_SIZE_IS_U16_CONVERTIBLE: () =
+        assert!(SIZE <= u16::MAX as usize, "SIZE must be less than 65535");
 
-                    _ => {}
+    fn on_key_event<ContentTy, WriterTy>(
+        &mut self,
+        event: KeyEvent,
+        prompt: &Prompt<ContentTy>,
+        output: &mut WriterTy,
+    ) -> Result<Option<&str>>
+    where
+        ContentTy: Iterator + Clone,
+        <ContentTy as Iterator>::Item: fmt::Display,
+        WriterTy: io::blocking::Write,
+    {
+        let KeyEvent {
+            code,
+            modifiers,
+            kind: _,
+        } = event;
+
+        let is_ctrl_modified = modifiers.contains(KeyModifiers::CONTROL);
+        let is_shift_modified = modifiers.contains(KeyModifiers::SHIFT);
+
+        if is_ctrl_modified && on_ctrl_key_event(code, prompt, output)? == LineStatus::Done {
+            return Ok(None);
+        }
+
+        if KeyCode::Enter == code && !self.escaped {
+            return Ok(Some(self.buffer.as_str()));
+        }
+
+        if KeyCode::Enter == code && self.escaped {
+            self.buffer.push('\n')?;
+
+            output
+                .queue(MoveToNextLine(1))?
+                .queue(MoveRight(4))?
+                .flush()?;
+
+            self.cursor += 1;
+            self.escaped = false;
+            return Ok(None);
+        }
+
+        if KeyCode::Backspace == code {
+            if self.cursor == 0 {
+                return Ok(None);
+            }
+
+            self.buffer.remove(self.cursor - 1);
+            let (_, updated) = self.buffer.split_at(self.cursor - 1);
+
+            output
+                .queue(MoveLeft(1))?
+                .queue(Clear(ClearType::LineFromCursor))?
+                .flush()?;
+
+            if !updated.is_empty() {
+                output
+                    .queue(Print(updated))?
+                    .queue(MoveLeft(updated.len() as u16))?
+                    .flush()?;
+            }
+
+            self.cursor -= 1;
+            return Ok(None);
+        }
+
+        if let KeyCode::Char(c) = code {
+            let cased = if c.is_alphabetic() && is_shift_modified {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            };
+
+            let is_cursor_eol = self.cursor == self.buffer.len();
+
+            if is_cursor_eol {
+                self.buffer.push(cased)?;
+                output.execute(Print(cased))?;
+            } else {
+                self.buffer.insert(self.cursor, cased)?;
+                let (_, updated) = self.buffer.split_at(self.cursor);
+
+                output
+                    .queue(Clear(ClearType::LineFromCursor))?
+                    .queue(Print(updated))?
+                    .queue(MoveLeft((updated.len() - 1) as u16))?
+                    .flush()?;
+            };
+
+            self.cursor += 1;
+            self.escaped = c == '\\';
+            return Ok(None);
+        }
+
+        match code {
+            KeyCode::Left => {
+                let old = self.cursor;
+                self.cursor = self.cursor.saturating_sub(1);
+
+                if old != self.cursor {
+                    output.execute(MoveLeft(1))?;
                 }
             }
 
-            Some(Err(err)) => return Err(Error::from(err)),
-            None => break,
-        }
-    }
+            KeyCode::Right => {
+                let old = self.cursor;
+                self.cursor = self.cursor.saturating_add(1).min(self.buffer.len());
 
-    Ok(unescape::<SIZE>(&line))
+                if old != self.cursor {
+                    output.execute(MoveRight(1))?;
+                }
+            }
+
+            _ => {}
+        }
+
+        Ok(None)
+    }
+}
+
+fn on_ctrl_key_event<ContentTy, WriterTy>(
+    key: KeyCode,
+    prompt: &Prompt<ContentTy>,
+    output: &mut WriterTy,
+) -> Result<LineStatus>
+where
+    ContentTy: Iterator + Clone,
+    <ContentTy as Iterator>::Item: fmt::Display,
+    WriterTy: io::blocking::Write,
+{
+    let status = match key {
+        KeyCode::Char('l') => {
+            output.queue(Clear(ClearType::All))?.queue(Home)?.flush()?;
+            prompt.reset(output)?;
+            LineStatus::Done
+        }
+
+        _ => LineStatus::Pending,
+    };
+
+    Ok(status)
 }
 
 fn unescape<const SIZE: usize>(input: &str) -> heapless::String<SIZE> {
@@ -140,4 +276,10 @@ fn unescape<const SIZE: usize>(input: &str) -> heapless::String<SIZE> {
         );
 
     acc
+}
+
+impl From<CapacityError> for Error {
+    fn from(_: CapacityError) -> Self {
+        Error::NoSpaceLeft
+    }
 }
