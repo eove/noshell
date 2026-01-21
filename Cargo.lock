@@ -455,6 +455,7 @@ dependencies = [
 [[package]]
 name = "noterm"
 version = "0.1.0"
+source = "git+ssh://git@github.com/inthehack/noterm?rev=f3bd6ad7115442326fc3c07f87dc76269d55b354#f3bd6ad7115442326fc3c07f87dc76269d55b354"
 dependencies = [
  "bitflags 2.10.0",
  "futures",

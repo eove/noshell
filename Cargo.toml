@@ -22,3 +22,7 @@ thiserror = { version = "2.0.11", default-features = false }
 
 # Dev dependencies.
 googletest = "0.13.0"
+
+[patch.crates-io.noterm]
+git = "ssh://git@github.com/inthehack/noterm"
+rev = "f3bd6ad7115442326fc3c07f87dc76269d55b354"
